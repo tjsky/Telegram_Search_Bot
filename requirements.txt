@@ -1,0 +1,6 @@
+pyyaml
+jieba
+aiosqlite
+python-telegram-bot
+python-dateutil
+python-telegram-bot[job-queue]
