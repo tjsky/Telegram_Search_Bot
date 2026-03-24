@@ -26,10 +26,10 @@ def get_db_path_by_offset(month_offset: int) -> str:
 
 def build_fts_query(column: str, keyword: str) -> str:
     """将搜索词用 jieba 切分，并组装成 SQLite FTS5 识别的 MATCH 语句"""
-    words = [w for w in jieba.lcut(keyword) if w.strip()]
+    clean_keyword = keyword.replace('"', '').replace("'", "").replace("*", "")
+    words = [w for w in jieba.lcut(clean_keyword) if w.strip()]
     if not words:
         return ""
-    # FTS5 语法：column : "词1" AND "词2"
     match_str = ' AND '.join([f'"{w}"' for w in words])
     return f'{column} : {match_str}'
 
@@ -50,7 +50,6 @@ async def execute_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(text, parse_mode='HTML')
         return
 
-    # 【新增逻辑】：判断使用全文检索引擎，还是 ID 精准匹配引擎
     is_fts = True
     sql_param = ""
     
@@ -62,7 +61,7 @@ async def execute_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
         sql_param = build_fts_query('sender_name', state['query'])
     elif state['type'] == 'id':
         is_fts = False
-        sql_param = state['query'] # 纯数字 ID，直接赋值
+        sql_param = state['query'] 
 
     limit = 10
     offset = (state['page'] - 1) * limit
@@ -74,7 +73,6 @@ async def execute_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 cursor = await db.execute("SELECT COUNT(*) FROM messages_fts WHERE messages_fts MATCH ?", (sql_param,))
                 total_count = (await cursor.fetchone())[0]
 
-                # 【变动】追加提取 m.user_id 和 m.message_id
                 cursor = await db.execute('''
                     SELECT m.id, datetime(m.timestamp, '+8 hours'), m.sender_name, m.message_thread_id, m.text, m.caption, m.media_group_id, m.file_id, m.user_id, m.message_id
                     FROM messages m
@@ -87,8 +85,6 @@ async def execute_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 # --- ID 精准查询模式 ---
                 cursor = await db.execute("SELECT COUNT(*) FROM messages WHERE user_id = ?", (sql_param,))
                 total_count = (await cursor.fetchone())[0]
-
-                # 【变动】追加提取 user_id 和 message_id
                 cursor = await db.execute('''
                     SELECT id, datetime(timestamp, '+8 hours'), sender_name, message_thread_id, text, caption, media_group_id, file_id, user_id, message_id
                     FROM messages
@@ -106,27 +102,21 @@ async def execute_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await context.bot.send_message(chat_id=update.effective_chat.id, text="📭 抱歉，当前月份没有找到匹配的记录。")
         return
 
-    # 3. 渲染单条长文本
+    # 3. 渲染查询文本
     msg_text = f"🔍 <b>检索结果</b> (当月共 {total_count} 条)\n"
     msg_text += f"📅 库文件: <code>{html.escape(db_path)}</code>\n"
     msg_text += f"📄 页码: {state['page']} / {((total_count - 1) // limit) + 1}\n\n"
     
-    # 提取纯数字的群组 ID，用于拼接消息直达链接 (例如: -1001234 变成 1234)
+    # 处理群组 ID，用于拼接消息直达链接
     chat_id_str = str(config.TARGET_CHAT_ID).replace('-100', '')
     
     current_count = 0
     for row in rows:
-        # 【解包】接收新增加的 user_id 和 tg_msg_id
         db_id, ts, name, thread_id, text_content, caption, mg_id, f_id, user_id, tg_msg_id = row
-        
-        # 【需求3】剔除我们当初存入的 (@xxxx) 后缀，改为展示纯数字 ID
         display_name = name.split(' (@')[0] if name else "未知"
         safe_name = html.escape(display_name)
         record = f"👤 <b>{safe_name}</b> <code>({user_id})</code> "
-        
-        # 【需求2】话题名称映射与动态截断（最多取前 10 个字符）
         if thread_id:
-            # 兼容 yaml 里 key 为数字或字符串的情况
             topic_name = config.TOPIC_MAPPING.get(thread_id) or config.TOPIC_MAPPING.get(str(thread_id))
             if topic_name:
                 display_topic = topic_name[:10]
@@ -137,22 +127,23 @@ async def execute_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
             record += f" <code>[话题：默认]</code> "
         record += f"\n🕒 {ts}\n"
 
-        # 处理内容截断
+        # 内容截断以防超过TG单条消息限制
         content = text_content or caption or ""
         if len(content) > config.DISPLAY_TEXT_LENGTH:
             content = content[:config.DISPLAY_TEXT_LENGTH] + "...\n[单条展示过长已折叠]"
             
         safe_content = html.escape(content)
         
-        # 【需求1】将 💬 图标变成可点击的超链接，直达 TG 原始群组消息
+        #  💬 图标直达 TG 原始群组消息
         msg_link = f"https://t.me/c/{chat_id_str}/{tg_msg_id}"
         record += f"<a href='{msg_link}'>💬</a> {safe_content}\n"
 
-        # 媒体提取指令 (保持用 db_id，旧逻辑不变)
+        # 媒体提取指令
+        offset_val = state['month_offset']
         if mg_id:
-            record += f"🖼 [媒体组] 提取发: <code>/album {mg_id}</code>\n"
+            record += f"🖼 [媒体组] 提取: <code>/album {mg_id} {offset_val}</code>\n"
         elif f_id:
-            record += f"🖼 [单媒体] 提取发: <code>/media {db_id}</code>\n"
+            record += f"🖼 [单媒体] 提取: <code>/media {db_id} {offset_val}</code>\n"
         
         record += "─" * 20 + "\n"
 
@@ -164,7 +155,7 @@ async def execute_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
         msg_text += record
         current_count += 1
 
-    # 4. 构建翻页内联键盘
+    # 4. 内联键盘
     keyboard = []
     nav_row = []
     if state['page'] > 1:
@@ -193,8 +184,7 @@ async def cmd_search_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
         await update.message.reply_text("用法: <code>/search</code> 关键词" , parse_mode='HTML')
         return
-    
-    # 初始化状态存入 user_data，突破 callback_data 的 64 字节限制
+
     context.user_data['search_state'] = {
         'type': 'text',
         'query': " ".join(context.args),
@@ -222,7 +212,7 @@ async def cmd_search_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """处理 /name 姓名 (针对显示昵称 Fullname)"""
     if not is_admin(update.effective_user.id): return
     if not context.args:
-        await update.message.reply_text("用法: <code>/name</code> 姓名 (例如 /name 大白狗)", parse_mode='HTML')
+        await update.message.reply_text("用法: <code>/name</code> 姓名 (例如 /name 小明)", parse_mode='HTML')
         return
     
     context.user_data['search_state'] = {
@@ -237,7 +227,6 @@ async def cmd_search_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """处理 /id 用户数字ID (终极追踪)"""
     if not is_admin(update.effective_user.id): return
     
-    # 必须提供参数，且参数必须是纯数字
     if not context.args or not context.args[0].isdigit():
         await update.message.reply_text("用法: <code>/id</code> 123456789 (必须提供纯数字的 User ID)", parse_mode='HTML')
         return
@@ -279,37 +268,46 @@ async def cmd_get_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """根据 message_id 还原单张媒体"""
     if not is_admin(update.effective_user.id): return
     if not context.args: return
+    
     msg_id = context.args[0]
+    month_offset = int(context.args[1]) if len(context.args) > 1 else 0
 
-    # 为了简单，直接去当月库查（可自行扩展跨月逻辑）
-    db_path = get_db_path_by_offset(context.user_data.get('search_state', {}).get('month_offset', 0))
+    db_path = get_db_path_by_offset(month_offset)
+    
+    if not os.path.exists(db_path):
+        await update.message.reply_text("⚠️ 找不到该媒体所在的数据库文件。")
+        return
+
     async with aiosqlite.connect(db_path) as db:
         cursor = await db.execute("SELECT file_id, caption FROM messages WHERE id = ?", (msg_id,))
         row = await cursor.fetchone()
     
     if row and row[0]:
-        # 尝试以照片发送，如果失败会被抛出异常，实际生产中可根据特征判断是视频还是图
         await update.message.reply_photo(photo=row[0], caption=row[1])
 
 async def cmd_get_album(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """根据 media_group_id 还原相册"""
     if not is_admin(update.effective_user.id): return
     if not context.args: return
+    
     group_id = context.args[0]
+    month_offset = int(context.args[1]) if len(context.args) > 1 else 0
+    db_path = get_db_path_by_offset(month_offset)
+    
+    if not os.path.exists(db_path):
+        await update.message.reply_text("⚠️ 找不到该相册所在的数据库文件。")
+        return
 
-    db_path = get_db_path_by_offset(context.user_data.get('search_state', {}).get('month_offset', 0))
     async with aiosqlite.connect(db_path) as db:
         cursor = await db.execute("SELECT file_id FROM messages WHERE media_group_id = ?", (group_id,))
         rows = await cursor.fetchall()
 
     if rows:
         media_group = [InputMediaPhoto(media=row[0]) for row in rows]
-        # Telegram API 限制一个 media_group 最多 10 张
         await update.message.reply_media_group(media=media_group[:10])
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """处理 /start 命令 (显示运维仪表盘)"""
-    # 终极静默防线：不是私聊直接扔，不是管理员直接扔
     if update.effective_chat.type != 'private': return
     if not is_admin(update.effective_user.id): return
     

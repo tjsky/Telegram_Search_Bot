@@ -8,13 +8,14 @@ import os
 # 定义东八区时区常量
 TZ_8 = timezone(timedelta(hours=8))
 
-# 提前初始化结巴分词，避免第一次运行时卡顿
+# 初始化结巴分词，避免第一次运行时卡顿
 jieba.initialize()
 
 class DatabaseManager:
     def __init__(self):
         self.buffer = []
-        self.lock = asyncio.Lock()  # 异步锁，防止并发写入时缓冲池冲突
+        self.lock = asyncio.Lock()
+        self.last_inited_db = None
 
     def get_db_path(self):
         """动态获取当前月份的数据库文件名"""
@@ -63,42 +64,51 @@ class DatabaseManager:
         """将缓冲池内的数据批量写入 SQLite (带 Jieba 分词处理)"""
         async with self.lock:
             if not self.buffer:
-                return  # 没数据就不操作
+                return  
 
             db_path = self.get_db_path()
             # 跨月处理
-            await self.init_db() 
+            if self.last_inited_db != db_path:
+                await self.init_db() 
+                self.last_inited_db = db_path
+            try:
+                async with aiosqlite.connect(db_path) as db:
+                    for msg in self.buffer:
+                        # 1. 写入原始数据
+                        cursor = await db.execute('''
+                            INSERT INTO messages (
+                                message_id, user_id, sender_name, message_thread_id, 
+                                text, file_id, caption, media_group_id
+                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                        ''', (
+                            msg.get('message_id'), msg.get('user_id'), msg.get('sender_name'),
+                            msg.get('message_thread_id'), msg.get('text'), msg.get('file_id'),
+                            msg.get('caption'), msg.get('media_group_id')
+                        ))
+                        last_row_id = cursor.lastrowid
 
-            async with aiosqlite.connect(db_path) as db:
-                for msg in self.buffer:
-                    # 1. 写入原始数据
-                    cursor = await db.execute('''
-                        INSERT INTO messages (
-                            message_id, user_id, sender_name, message_thread_id, 
-                            text, file_id, caption, media_group_id
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                    ''', (
-                        msg.get('message_id'), msg.get('user_id'), msg.get('sender_name'),
-                        msg.get('message_thread_id'), msg.get('text'), msg.get('file_id'),
-                        msg.get('caption'), msg.get('media_group_id')
-                    ))
-                    last_row_id = cursor.lastrowid
+                        # 2. 用 jieba 分词 (搜索引擎模式) 处理需要检索的中文内容
+                        seg_name = " ".join(jieba.lcut_for_search(msg.get('sender_name') or ""))
+                        seg_text = " ".join(jieba.lcut_for_search(msg.get('text') or ""))
+                        seg_caption = " ".join(jieba.lcut_for_search(msg.get('caption') or ""))
 
-                    # 2. 用 jieba 分词 (搜索引擎模式) 处理需要检索的中文内容
-                    seg_name = " ".join(jieba.lcut_for_search(msg.get('sender_name') or ""))
-                    seg_text = " ".join(jieba.lcut_for_search(msg.get('text') or ""))
-                    seg_caption = " ".join(jieba.lcut_for_search(msg.get('caption') or ""))
+                        # 3. 写入 FTS5 检索表
+                        await db.execute('''
+                            INSERT INTO messages_fts (rowid, sender_name, text, caption)
+                            VALUES (?, ?, ?, ?)
+                        ''', (last_row_id, seg_name, seg_text, seg_caption))
 
-                    # 3. 写入 FTS5 检索表
-                    await db.execute('''
-                        INSERT INTO messages_fts (rowid, sender_name, text, caption)
-                        VALUES (?, ?, ?, ?)
-                    ''', (last_row_id, seg_name, seg_text, seg_caption))
-
-                await db.commit()
-            
-            # 清空缓冲池
-            self.buffer.clear()
+                    await db.commit()
+                
+                # 写入成功后，清空缓冲池
+                self.buffer.clear()
+                
+            except Exception as e:
+                print(f"❌ 数据库写入严重异常: {e}")
+                # 防止因为磁盘满了或数据异常导致把内存炸了
+                if len(self.buffer) > config.BUFFER_LIMIT * 2:
+                    print("⚠️ 缓冲池数据堆积过多，强制清空缓冲池！请尝试重启BOT和检查磁盘剩余空间")
+                    self.buffer.clear()
             
     async def get_db_stats(self):
         """获取当前数据库的运行统计信息"""
