@@ -3,7 +3,7 @@ import jieba
 import aiosqlite
 import html
 from datetime import datetime, timezone, timedelta
-from dateutil.relativedelta import relativedelta  # 需安装: pip install python-dateutil
+from dateutil.relativedelta import relativedelta
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto, InputMediaVideo
 from telegram.ext import ContextTypes
 from database import db_manager
@@ -115,7 +115,7 @@ async def execute_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
         db_id, ts, name, thread_id, text_content, caption, mg_id, f_id, user_id, tg_msg_id = row
         display_name = name.split(' (@')[0] if name else "未知"
         safe_name = html.escape(display_name)
-        record = f"👤 <b>{safe_name}</b> <code>({user_id})</code> "
+        record = f"👤 <b>{safe_name}</b>( <code>{user_id}</code> )"
         if thread_id:
             topic_name = config.TOPIC_MAPPING.get(thread_id) or config.TOPIC_MAPPING.get(str(thread_id))
             if topic_name:
@@ -166,7 +166,7 @@ async def execute_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
         keyboard.append(nav_row)
 
     if total_count < 200:
-        keyboard.append([InlineKeyboardButton("⏳ 当月结果较少，点此追溯上个月", callback_data="nav:cross_month")])
+        keyboard.append([InlineKeyboardButton("⏳ 当月结果较少，点此查看上个月", callback_data="nav:cross_month")])
 
     reply_markup = InlineKeyboardMarkup(keyboard) if keyboard else None
 
@@ -244,7 +244,7 @@ async def cmd_search_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_pagination(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """处理按钮点击"""
     query = update.callback_query
-    await query.answer() # 消除按钮上的转圈圈
+    await query.answer() 
 
     state = context.user_data.get('search_state')
     if not state:
@@ -258,7 +258,7 @@ async def handle_pagination(update: Update, context: ContextTypes.DEFAULT_TYPE):
         state['page'] += 1
     elif action == "cross_month":
         state['month_offset'] += 1
-        state['page'] = 1 # 跨月后页码重置
+        state['page'] = 1 
 
     await execute_search(update, context)
 

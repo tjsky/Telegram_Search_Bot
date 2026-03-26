@@ -14,6 +14,6 @@ bot:
 database:
   db_dir: ""                        # 数据库存放位置，绝对路径比如："/mybot_data/db"，不填，则默认存在项目根目录下
   buffer_limit: 50                  # 缓冲池达到多少条时触发写入
-  flush_interval_seconds: 5         # 即使没缓冲池，每隔几秒也强制写入一次
+  flush_interval_seconds: 5         # 即使缓冲池没满，每隔几秒也强制写入一次
   max_text_length: 4096             # TG 原生最大长度（除非你知道在做什么，否则别改这个）
   display_text_length: 2000         # 搜索显示时单消息截断长度（除非你知道在做什么，否则别改这个）

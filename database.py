@@ -100,14 +100,14 @@ class DatabaseManager:
 
                     await db.commit()
                 
-                # 写入成功后，清空缓冲池
+                # 4. 写入成功后，清空缓冲池
                 self.buffer.clear()
                 
             except Exception as e:
                 print(f"❌ 数据库写入严重异常: {e}")
                 # 防止因为磁盘满了或数据异常导致把内存炸了
                 if len(self.buffer) > config.BUFFER_LIMIT * 2:
-                    print("⚠️ 缓冲池数据堆积过多，强制清空缓冲池！请尝试重启BOT和检查磁盘剩余空间")
+                    print("⚠️ 缓冲池数据堆积过多，将强制清空缓冲池！请尝试重启BOT和检查磁盘剩余空间")
                     self.buffer.clear()
             
     async def get_db_stats(self):

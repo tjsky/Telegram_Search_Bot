@@ -18,7 +18,7 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
     if not msg:
         return
 
-    # 2. 提取身份信息与话题状态 (Topic)
+    # 2. 提取身份信息与话题状态
     user = msg.from_user
     sender_name = user.first_name
     if user.last_name:
@@ -26,19 +26,19 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
     if user.username:
         sender_name += f" (@{user.username})"
 
-    # 话题群组(Forum)记录对应的话题 ID
+    # 3. 话题群组记录对应的话题 ID
     message_thread_id = msg.message_thread_id if msg.is_topic_message else None
 
-    # 3. 提取文本内容
+    # 4. 提取文本内容
     raw_text = msg.text or msg.caption or ""
 
-    # 4. 截断文字 防止超出 TG 的 4096 限制
+    # 5. 截断文字 防止超出 TG 的 4096 限制
     truncate_suffix = "\n[文本过长已截断]"
     if len(raw_text) > config.MAX_TEXT_LENGTH:
         safe_length = config.MAX_TEXT_LENGTH - len(truncate_suffix)
         raw_text = raw_text[:safe_length] + truncate_suffix
 
-    # 5. 提取媒体文件的 file_id
+    # 6. 提取媒体文件的 file_id
     file_id = None
     if msg.photo:
         file_id = msg.photo[-1].file_id 
@@ -49,11 +49,11 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
     elif msg.animation: 
         file_id = msg.animation.file_id
 
-    # 排除系统消息、贴纸、故事、动态等特殊消息
+    # 7. 排除系统消息、贴纸、故事、动态等特殊消息
     if not raw_text and not file_id:
         return
 
-    # 6. 推送至数据库缓冲池
+    # 8. 推送至缓冲池
     msg_data = {
         'message_id': msg.message_id,
         'user_id': user.id,
